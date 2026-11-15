@@ -1,7 +1,13 @@
-version: "3.7"
+# Redis for the redif-lettuce tests: `docker compose up -d --wait`, then `./gradlew test`.
+# The port is offset from the default so it does not collide with another local Redis.
+# Override with REDIF_TEST_REDIS_HOST / REDIF_TEST_REDIS_PORT.
 services:
-
-  test-redis:
-    image: "redis:6.2.3"
+  redis:
+    image: "redis:8.2.1"
     ports:
       - "6377:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
