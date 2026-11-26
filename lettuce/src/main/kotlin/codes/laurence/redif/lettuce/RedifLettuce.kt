@@ -2,62 +2,29 @@ package codes.laurence.redif.lettuce
 
 import codes.laurence.redif.RedifAPI
 import codes.laurence.redif.RedifClientConfig
-import io.lettuce.core.ExperimentalLettuceCoroutinesApi
-import io.lettuce.core.RedisClient
-import io.lettuce.core.RedisURI
-import io.lettuce.core.SetArgs
-import io.lettuce.core.api.coroutines
-import io.lettuce.core.api.coroutines.RedisCoroutinesCommands
-import kotlinx.coroutines.flow.toList
+import codes.laurence.redif.commands.hashes.HashesAPI
+import codes.laurence.redif.commands.hyperloglog.HyperLogLogAPI
+import codes.laurence.redif.commands.keys.KeysAPI
+import codes.laurence.redif.commands.sets.SetsAPI
+import codes.laurence.redif.commands.sortedsets.SortedSetsAPI
+import codes.laurence.redif.commands.strings.StringsAPI
 
-@OptIn(ExperimentalLettuceCoroutinesApi::class)
-class RedifLettuce(config: RedifClientConfig) : RedifAPI {
+/**
+ * [RedifAPI] over a Redis instance, 7.0 or later, through Lettuce. Every command goes down one
+ * connection, which Lettuce writes to without waiting for earlier replies, so commands sent from
+ * coroutines running at the same time are pipelined.
+ */
+class RedifLettuce private constructor(private val connection: LettuceConnection) :
+    RedifAPI,
+    StringsAPI by LettuceStrings(connection),
+    KeysAPI by LettuceKeys(connection),
+    HashesAPI by LettuceHashes(connection),
+    SetsAPI by LettuceSets(connection),
+    SortedSetsAPI by LettuceSortedSets(connection),
+    HyperLogLogAPI by LettuceHyperLogLog(connection) {
 
-  private val client: RedisClient
-  private val commands: RedisCoroutinesCommands<String, String>
+  constructor(config: RedifClientConfig) : this(LettuceConnection(config))
 
-  init {
-    val uriBuilder = RedisURI.builder()
-    uriBuilder.withHost(config.host)
-    uriBuilder.withPort(config.port)
-    config.auth?.let { uriBuilder.withAuthentication(it.user, it.password) }
-    client = RedisClient.create(uriBuilder.build())
-    commands = client.connect().coroutines()
-  }
-
-  override suspend fun pexpire(key: String, expireMillis: Long): Boolean {
-    return commands.pexpire(key, expireMillis).check()
-  }
-
-  override suspend fun del(vararg keys: String): Long {
-    var counter = 0L
-    keys.forEach { pattern ->
-      val matchingKeys = commands.keys(pattern).toList()
-      if (matchingKeys.isNotEmpty()) {
-        counter += commands.del(*matchingKeys.toTypedArray()).check()
-      }
-    }
-    return counter
-  }
-
-  override suspend fun set(key: String, value: String) {
-    commands.set(key, value)
-  }
-
-  override suspend fun psetx(key: String, value: String, expireMillis: Long) {
-    commands.set(key, value, SetArgs.Builder.px(expireMillis))
-  }
-
-  // SET NX answers OK when it set and nothing when the key was already there.
-  override suspend fun setnx(key: String, value: String): Boolean {
-    return commands.set(key, value, SetArgs.Builder.nx()) != null
-  }
-
-  override suspend fun get(key: String): String? {
-    return commands.get(key)
-  }
-}
-
-private fun <T : Any> T?.check(): T {
-  return this ?: throw Exception("Null check failed on Lettuce coroutines api")
+  /** Closes the connection and shuts the Lettuce client down. */
+  override fun close() = connection.close()
 }

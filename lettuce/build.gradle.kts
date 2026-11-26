@@ -11,5 +11,5 @@ dependencies {
   implementation(libs.lettuceCore)
   implementation(libs.kotlinxCoroutinesReactive)
 
-  testImplementation(testFixtures(project(":redif-core")))
+  testImplementation(project(":redif-compatibility"))
 }

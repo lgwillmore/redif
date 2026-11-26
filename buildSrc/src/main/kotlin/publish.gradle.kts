@@ -65,17 +65,3 @@ dokka {
         }
     }
 }
-
-// Test fixture variants, sources included, are published only where the module sets `publishTestFixtures`: core's
-// fixtures seed stores and subscribers in consumer tests, while the backend fixtures are connection helpers for this
-// build's docker databases. This runs after the publish plugin has added the variants to the component.
-plugins.withId("java-test-fixtures") {
-    afterEvaluate {
-        if (findProperty("publishTestFixtures") != true) {
-            val javaComponent = components["java"] as AdhocComponentWithVariants
-            listOf("testFixturesApiElements", "testFixturesRuntimeElements", "testFixturesSourcesElements").forEach {
-                javaComponent.withVariantsFromConfiguration(configurations[it]) { skip() }
-            }
-        }
-    }
-}

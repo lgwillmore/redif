@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Redif is a small Redis facade for Kotlin on the JVM. Your code talks to `RedifAPI`, a suspending interface over the
-handful of Redis commands it needs, and you choose the implementation at wiring time:
+Redis commands an application reaches for, and you choose the implementation at wiring time:
 
 - `RedifInMemory` keeps the keys in the process, with expiry. No Redis to run: for tests, single-instance caching
   and development.
@@ -23,16 +23,19 @@ repositories {
 
 dependencies {
     implementation("codes.laurence.redif:redif-core:<version>")
-    implementation("codes.laurence.redif:redif-lettuce:<version>") // the Lettuce client
+    implementation("codes.laurence.redif:redif-lettuce:<version>")       // the Lettuce client
+    testImplementation("codes.laurence.redif:redif-in-memory:<version>") // or `implementation`, to run without Redis
 }
 ```
 
 | Artifact | Contents |
 | --- | --- |
-| `redif-core` | `RedifAPI`, `RedifClientConfig` and `RedifInMemory` |
+| `redif-core` | `RedifAPI`, its command groups and `RedifClientConfig` |
+| `redif-in-memory` | `RedifInMemory`, a `RedifAPI` kept in the process |
 | `redif-lettuce` | `RedifLettuce`, a `RedifAPI` over a Redis instance through `io.lettuce:lettuce-core` |
+| `redif-compatibility` | The contract suites, for testing your own `RedifAPI` implementation |
 
-Requires JDK 17 or later.
+Requires JDK 17 or later, and for `RedifLettuce` Redis 7.0 or later.
 
 ## Use
 
@@ -43,16 +46,70 @@ val redis: RedifAPI =
 
 redis.psetx("session:$id", token, expireMillis = 900_000)
 val token = redis.get("session:$id")
+
+redis.close() // on shutdown
 ```
+
+A member of `RedifAPI` is the Redis command of the same name, with Redis's argument order and return meaning, so
+the [Redis command reference](https://redis.io/docs/latest/commands/) is the reference for each.
 
 ## Commands
 
-Commands are added as they are needed. Today:
-
 | Group | Commands |
 | --- | --- |
-| Keys | `pexpire`, `del` (with Redis glob patterns) |
-| Strings | `set`, `psetx`, `setnx`, `get` |
+| Strings | `set` (with `NX`, `XX`, `PX`, `KEEPTTL`, `GET`), `psetx`, `setnx`, `get`, `mget`, `mset`, `getdel`, `incrby`, `decrby` |
+| Keys | `pexpire` (with `NX`, `XX`, `GT`, `LT`), `del` (with Redis glob patterns), `exists`, `pttl`, `persist`, `type`, `scan` |
+| Hashes | `hset`, `hget`, `hmget`, `hgetall`, `hdel`, `hexists`, `hlen`, `hincrby` |
+| Sets | `sadd`, `srem`, `scard`, `sismember`, `smembers` |
+| Sorted sets | `zadd` (with `NX`, `XX`, `GT`, `LT`, `CH`), `zrem`, `zcard`, `zscore`, `zincrby`, `zcount`, `zrange` (by rank or score, with `REV` and `LIMIT`), `zremrangebyscore` |
+| HyperLogLog | `pfadd`, `pfcount`, `pfmerge` |
+
+**Errors.** Where Redis refuses a command, such as one against a key holding another type, the call throws
+`RedifCommandException`. Branch on its `code`, the first word of Redis's error (`WRONGTYPE`, `ERR`), not on its
+message.
+
+**A count with an expiry**, for a rate limit, is two commands and needs no transaction:
+
+```kotlin
+val count = redis.incrby("limit:$caller", 1)
+redis.pexpire("limit:$caller", 60_000, ExpireCondition.NX) // only the window's first caller sets it
+```
+
+**Pipelining** needs no batch API. `RedifLettuce` sends every command down one connection without waiting for the
+reply to the one before, so commands from coroutines running at the same time share round trips.
+
+## Testing your own implementation
+
+`redif-compatibility` holds the contract as one JUnit 5 suite for each command group. Write a harness that hands the
+suites your client, and a class for each suite:
+
+```kotlin
+dependencies {
+    testImplementation("codes.laurence.redif:redif-compatibility:<version>")
+}
+```
+
+```kotlin
+object MyHarness : RedifHarness {
+    private val shared = MyRedif(config)
+
+    override fun client(): RedifAPI = shared
+
+    // Optional hooks, each given the client of the case:
+    override suspend fun beforeEach(client: RedifAPI) {}
+    override suspend fun afterEach(client: RedifAPI) {}
+}
+
+class MyHashesTest : HashesContract(MyHarness)
+class MyHyperLogLogTest : HyperLogLogContract(MyHarness)
+class MyKeysTest : KeysContract(MyHarness)
+class MySetsTest : SetsContract(MyHarness)
+class MySortedSetsTest : SortedSetsContract(MyHarness)
+class MyStringsTest : StringsContract(MyHarness)
+```
+
+Every case makes its own random keys, so the cases can share one client and one Redis, and nothing needs clearing
+between them.
 
 ## Contributing
 
