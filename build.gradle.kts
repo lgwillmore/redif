@@ -32,5 +32,7 @@ dokka { moduleName = "Redif" }
 
 dependencies {
   dokka(project(":redif-core"))
+  dokka(project(":redif-in-memory"))
   dokka(project(":redif-lettuce"))
+  dokka(project(":redif-compatibility"))
 }

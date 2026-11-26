@@ -1,5 +1,6 @@
-package codes.laurence.redif
+package codes.laurence.redif.inmemory
 
+import codes.laurence.redif.RedifAPI
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant

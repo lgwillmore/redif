@@ -19,10 +19,14 @@ plugins {
 
 include(
     ":core",
+    ":in-memory",
     ":lettuce",
+    ":compatibility",
 )
 
 project(":core").name = "redif-core"
+project(":in-memory").name = "redif-in-memory"
 project(":lettuce").name = "redif-lettuce"
+project(":compatibility").name = "redif-compatibility"
 
 rootProject.name = "redif"

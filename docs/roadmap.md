@@ -3,6 +3,9 @@
 Status: active backlog, written on 2026-11-14 when the library moved to Maven Central. Current implementation rules
 live in [`AGENTS.md`](../AGENTS.md).
 
+Items 1 and 2 are planned in detail, with streams, sorted sets, pub/sub and more, in
+[`command-expansion-plan.md`](command-expansion-plan.md) (2026-11-26).
+
 ## Remaining work
 
 1. **Atomic counting with expiry.** An `incr` (or `incrby`) in the strings group, alongside `pexpire`, so a caller
