@@ -1,10 +1,9 @@
 # Publishing
 
-The library modules (`redif-core`, `redif-lettuce`) apply the `buildsrc.convention.publish` convention, which
+The library modules (`redif-core`, `redif-in-memory`, `redif-lettuce`, `redif-compatibility`) apply the `buildsrc.convention.publish` convention, which
 publishes them to Maven Central under `codes.laurence.redif` with the
 [vanniktech Maven Publish plugin](https://vanniktech.github.io/gradle-maven-publish-plugin/): jar, sources, a
-javadoc jar holding the Dokka API reference, Gradle module metadata and POM, all signed. Core's test fixtures are
-never published.
+javadoc jar holding the Dokka API reference, Gradle module metadata and POM, all signed.
 
 ## Versions
 
@@ -15,8 +14,8 @@ the Release workflow creates release tags.
 Before Maven Central, Redif was published to a private AWS CodeArtifact repository as `io.plurex:redif` with
 `v`-prefixed tags up to `v0.1.1`. Each of those commits also carries the plain tag (`0.0.1` to `0.1.1`) so the bump
 counts from `0.1.1` and no Central version reuses a CodeArtifact one. The first Central release is the first under
-`codes.laurence.redif`: it renames the packages and splits the Lettuce client into `redif-lettuce`, so `minor` gives
-`0.2.0`.
+`codes.laurence.redif`: it renames the packages and splits the implementations into `redif-in-memory` and `redif-lettuce`, so
+`minor` gives `0.2.0`.
 
 ## Releasing
 

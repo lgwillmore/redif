@@ -33,6 +33,31 @@ abstract class HyperLogLogContract(harness: RedifHarness) : RedifContract(harnes
   }
 
   @Test
+  fun `pfadd - no elements creates the key`() {
+    runBlocking {
+      val key = randString()
+
+      assertThat(client.pfadd(key)).isTrue()
+      assertThat(client.pfadd(key)).isFalse()
+
+      assertThat(client.exists(key)).isEqualTo(1)
+      assertThat(client.pfcount(key)).isEqualTo(0)
+    }
+  }
+
+  @Test
+  fun `pfmerge - no sources creates the destination`() {
+    runBlocking {
+      val dest = randString()
+
+      client.pfmerge(dest)
+
+      assertThat(client.exists(dest)).isEqualTo(1)
+      assertThat(client.pfcount()).isEqualTo(0)
+    }
+  }
+
+  @Test
   fun `pfcount - missing key`() {
     runBlocking { assertThat(client.pfcount(randString())).isEqualTo(0) }
   }
