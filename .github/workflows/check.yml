@@ -25,6 +25,11 @@ jobs:
         run: ./gradlew ktfmtCheck
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The newest Redis, and the oldest redif supports.
+        redis: [ "8.2.1", "7.0" ]
     permissions:
       contents: read
       checks: write
@@ -39,11 +44,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
       - name: Start Redis
         run: docker compose up -d --wait
+        env:
+          REDIF_TEST_REDIS_VERSION: ${{ matrix.redis }}
       - name: Test with Gradle
         run: ./gradlew test
       - name: Publish Unit Test Results
         uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
         with:
+          check_name: Test Results (Redis ${{ matrix.redis }})
           files: |
             */build/test-results/**/*.xml

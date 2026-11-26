@@ -8,15 +8,16 @@ Status: a brief for the work, written on 2026-11-26. Nothing in it is built. The
 Redif has six commands: `set`, `psetx`, `setnx`, `get`, `pexpire` and `del`. Plurex, its first consumer, is about
 to use Redis for much more:
 
-- **A stream of usage pings.** Meters append a ping a minute for everything consumed, and billing reads them as a
-  consumer group.
 - **Shared counts.** Rate limits, and caps on how much an org may hold at once.
-- **Live holds.** Which markets an org holds and which streams a caller has open, where a hold must disappear when
-  its holder dies without releasing it.
+- **Live holds.** Which markets an org holds, where a hold must disappear when its holder dies without releasing
+  it.
 - **Published state.** Whether an org has credit left, read by a guard on every request.
 
 The aim is one release that covers these and the wider set of Redis an application reaches for next, so the
 interface does not grow one command at a time.
+
+Streams and pub/sub were in the first draft of this plan and were dropped on 2026-11-26: they reach beyond what the
+facade exists for.
 
 ## What stays true
 
@@ -33,32 +34,27 @@ interface does not grow one command at a time.
 
 1. Groundwork: the three changes every later step leans on.
 2. The command groups that are plain request and response.
-3. Streams without blocking.
-4. The four decisions about the client's shape, one at a time.
+3. The two decisions about the client's shape.
 
 Each step is its own pull request, with `AGENTS.md` and the README updated in it.
 
 ## 1. Groundwork
 
 **A keyspace of typed values in `RedifInMemory`.** Today it is a map of strings. It becomes a map of keys to a
-sealed value (string, hash, set, sorted set, stream, HyperLogLog), each with the key's expiry, so that:
+sealed value (string, hash, set, sorted set, HyperLogLog), each with the key's expiry, so that:
 
 - One key holds one type, as in Redis.
 - `pexpire`, `del`, `exists` and the lazy expiry on read work for every type with no code per type.
-- An empty hash, set or sorted set removes its key, as Redis does. A stream does not: an emptied stream keeps its
-  key and its groups.
+- An empty hash, set or sorted set removes its key, as Redis does.
 
-**Errors.** Redis refuses some commands with an error whose first word is a code: `WRONGTYPE`, `BUSYGROUP`,
-`NOGROUP`. Nothing in redif models that today.
+**Errors.** Redis refuses some commands with an error whose first word is a code, such as `WRONGTYPE`. Nothing in redif models that today.
 
 - Add `RedifCommandException(code, message)` in core.
 - `RedifLettuce` turns Lettuce's `RedisCommandExecutionException` into it.
 - `RedifInMemory` throws it wherever Redis would, with the same code.
 - The contract asserts the code, never the message.
 
-**Closing.** `RedifLettuce` opens a client and never shuts it down, which the later steps make worse by opening
-more connections. `RedifAPI` becomes `AutoCloseable`. `RedifInMemory`'s `close` cancels its waiting readers and
-subscribers.
+**Closing.** `RedifLettuce` opens a client and never shuts it down. `RedifAPI` becomes `AutoCloseable`.
 
 ## 2. Command groups
 
@@ -129,78 +125,12 @@ nothing.
 `pfadd`, `pfcount`, `pfmerge`. `RedifInMemory` keeps an exact set, which is within any error Redis allows. The
 contract asserts a count within Redis's stated error (about 1%), never an exact one, on a few thousand members.
 
-## 3. Streams (`StreamsAPI`, new)
+## 3. Decisions about the client's shape
 
-The largest piece, and the one where `RedifInMemory` must be exact or the contract proves nothing.
-
-| Command | Signature | Notes |
-|---|---|---|
-| `XADD` | `xadd(stream, fields: Map<String, String>, args: XAddArgs? = null): StreamEntryId` | `args`: an explicit id, `NOMKSTREAM`, and a trim |
-| `XLEN` | `xlen(stream): Long` | |
-| `XRANGE` | `xrange(stream, from: StreamEntryId, to: StreamEntryId, count: Long? = null): List<StreamEntry>` | Replay from a point in time is a range from that millisecond |
-| `XTRIM` | `xtrim(stream, trim: StreamTrim): Long` | |
-| `XDEL` | `xdel(stream, vararg ids): Long` | |
-| `XGROUP CREATE` | `xgroupCreate(stream, group, from: StreamEntryId, mkstream: Boolean = false)` | An existing group is the `BUSYGROUP` error, as in Redis |
-| `XGROUP DESTROY` | `xgroupDestroy(stream, group): Boolean` | |
-| `XREADGROUP` | `xreadgroup(stream, group, consumer, count: Long, from: ReadFrom = ReadFrom.New): List<StreamEntry>` | No blocking in this step. `ReadFrom.New` is `>`; an id rereads that consumer's own pending entries |
-| `XACK` | `xack(stream, group, vararg ids): Long` | |
-| `XPENDING` | `xpending(stream, group): PendingSummary`, and a ranged form listing entries with consumer, idle time and delivery count | The reader's lag, as a number to graph |
-| `XAUTOCLAIM` | `xautoclaim(stream, group, consumer, minIdleMillis, start: StreamEntryId, count: Long): AutoClaimed` | Returns the next cursor with the entries. Needs Redis 6.2 |
-
-- `StreamTrim` is `MaxLen(entries)` or `MinId(id)`, each with an `approximate` flag for Redis's `~`. Trimming by
-  age is `MinId` of a millisecond.
-- `StreamEntryId` is `<milliseconds>-<sequence>` and orders by both. `MIN` and `MAX` stand for `-` and `+`.
-
-**What `RedifInMemory` must get right**, each with a contract case:
-
-- Ids come from its `Clock` and never go backwards: an append in the same millisecond, or after the clock moved
-  back, takes the last id's millisecond and the next sequence.
-- A group has a last-delivered id. Each entry delivered and not acknowledged is pending under one consumer, with
-  when it was last delivered and how many times.
-- Rereading with an id returns that consumer's pending entries and does not count as another delivery of a new
-  entry. `xautoclaim` moves an entry to the claiming consumer, resets its idle time and adds a delivery.
-- An entry trimmed or deleted while pending stays in the pending list; `xautoclaim` drops such entries from it,
-  as Redis 7 does.
-- An approximate trim may trim exactly. The contract uses exact trims wherever it asserts a length.
-
-## 4. Decisions about the client's shape
-
-Each of these changes how `RedifLettuce` holds connections or how the interface reads, so each is decided and
-written into `AGENTS.md` before its code. The recommendation is given; raise it with the owner if the code shows
+Each of these is about how the interface reads, so each is decided and written into `AGENTS.md` before its code. The recommendation is given; raise it with the owner if the code shows
 it to be wrong.
 
-### 4.1 Blocking reads
-
-A connection answers commands in order, so `XREADGROUP … BLOCK` holds up everything queued behind it on that
-connection. That is Redis's protocol and true of any client; Lettuce itself is non-blocking.
-
-**Recommended:** `xreadgroup` gains a `blockMillis` argument. `RedifLettuce` keeps its shared connection for
-everything else and runs a blocking read on a connection of its own, taken from a small pool it owns.
-
-- A coroutine cancelled while blocked must not hand back a connection that still has a read outstanding on the
-  server. Discard that connection; do not return it to the pool.
-- Check whether Lettuce's own `AsyncPool` support does this without the `commons-pool2` dependency. Prefer no new
-  dependency.
-- In `RedifInMemory` the read suspends until an append to that stream wakes it or the time runs out. The wait is
-  real time (`withTimeoutOrNull`), since nothing can wait on an injected clock; ids and idle times still come from
-  the `Clock`.
-- The contract covers: a blocked read woken by an append, one that times out empty, and one cancelled, after which
-  the client still works.
-
-### 4.2 Pub/sub (`PubSubAPI`)
-
-**Recommended:**
-
-- `publish(channel, message): Long`, the number of subscribers that received it.
-- `subscribe(vararg channels): Flow<PubSubMessage>` and `psubscribe(vararg patterns)`. Collecting the flow opens a
-  pub/sub connection and subscribes; cancelling the collection unsubscribes and closes it.
-- The contract says plainly what pub/sub is: a message published with no subscriber is lost, and nothing is
-  replayed. A test must wait until the subscription is live before it publishes, so expose that (a
-  `subscribed` signal on the returned handle, or the flow emitting a first "subscribed" item, as Redis itself
-  confirms a subscription).
-- `RedifInMemory` fans out to its collectors under the mutex, with the same glob matching `del` uses for patterns.
-
-### 4.3 Pipelining
+### 3.1 Pipelining
 
 **Recommended: add nothing, and prove it.** Lettuce writes a command without waiting for the reply to the one
 before, so coroutines that call the shared connection at the same time are already pipelined. Write one Lettuce
@@ -208,7 +138,7 @@ test that sends a few thousand `set`s from concurrent coroutines and shows they 
 worth of time than the same sent one after another, and say so in the README. Add an explicit batch API only if
 that test shows the claim to be false.
 
-### 4.4 Commands that must be atomic together
+### 3.2 Commands that must be atomic together
 
 The facade rule rules out invented composites, and this plan needs none for counting (section 2) or for live holds
 (sorted sets). The one case left is releasing a lock only if you still hold it: compare, then delete.
@@ -224,8 +154,8 @@ The facade rule rules out invented composites, and this plan needs none for coun
 
 | Needs | Since |
 |---|---|
-| `XAUTOCLAIM`, `XADD … MINID`, `GETDEL` | 6.2 |
-| `PEXPIRE … NX/XX/GT/LT`, `XAUTOCLAIM` dropping deleted entries | 7.0 |
+| `GETDEL` | 6.2 |
+| `PEXPIRE … NX/XX/GT/LT` | 7.0 |
 
 **The floor is Redis 7.0.** State it in the README.
 
@@ -239,10 +169,10 @@ The facade rule rules out invented composites, and this plan needs none for coun
 ## Done when
 
 - Every command above has contract cases, and `RedifInMemoryTest` and `RedifLettuceTest` both pass them.
-- `AGENTS.md` lists the new groups and the four decisions as they were made; the README shows the groups and the
+- `AGENTS.md` lists the new groups and the two decisions as they were made; the README shows the groups and the
   version floor.
 - `docs/roadmap.md` no longer lists counting, hashes or sets, and keeps the published test kit and anything left
-  open in 4.4.
+  open in 3.2.
 - `./gradlew ktfmtFormat` has been run.
 
 Publishing the release is the owner's step and is not part of this work.

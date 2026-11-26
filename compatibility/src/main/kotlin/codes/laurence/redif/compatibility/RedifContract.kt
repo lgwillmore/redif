@@ -1,6 +1,7 @@
 package codes.laurence.redif.compatibility
 
 import codes.laurence.redif.RedifAPI
+import codes.laurence.redif.RedifCommandException
 import kotlin.math.absoluteValue
 import kotlin.random.Random
 import kotlin.test.AfterTest
@@ -28,4 +29,17 @@ abstract class RedifContract(private val harness: RedifHarness) {
 
   /** A string no other case will make, for keys, members and values. */
   protected fun randString() = "GENERATED${Random.nextLong().absoluteValue}"
+
+  /**
+   * The code of the error Redis refuses [command] with. Cases assert the code and never the
+   * message, which is Redis's wording to change.
+   */
+  protected suspend fun errorCodeOf(command: suspend () -> Unit): String {
+    try {
+      command()
+    } catch (e: RedifCommandException) {
+      return e.code
+    }
+    throw AssertionError("Expected the command to be refused with a RedifCommandException")
+  }
 }
